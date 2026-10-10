@@ -1,0 +1,53 @@
+name: Build APK from ZIP
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: |
+          ZIP=$(find . -maxdepth 3 -iname '*.zip' -not -path './.git/*' | head -n1)
+          test -n "$ZIP" || { echo "No zip found in repo"; exit 1; }
+          echo "Using: $ZIP"
+          mkdir -p "$RUNNER_TEMP/proj"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/proj"
+          SETTINGS=$(find "$RUNNER_TEMP/proj" -maxdepth 3 \( -name settings.gradle.kts -o -name settings.gradle \) | head -n1)
+          test -n "$SETTINGS" || { echo "settings.gradle not found"; exit 1; }
+          echo "PROJECT_DIR=$(dirname "$SETTINGS")" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Assemble debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle :app:assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shield-browser-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+
+      - name: Publish release (direct APK download)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-${{ github.run_number }}" \
+            "$PROJECT_DIR"/app/build/outputs/apk/debug/*.apk \
+            --repo "${{ github.repository }}" \
+            --title "ShieldBrowser build ${{ github.run_number }}" \
+            --notes "Debug APK"
